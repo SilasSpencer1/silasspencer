@@ -349,6 +349,20 @@
                 }
             });
         }
+        // allow left/right arrows to cycle the deck
+        document.addEventListener('keydown', e => {
+            // ignore input when a link or form control is focused
+            const tag = document.activeElement.tagName.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'a' || tag === 'button') return;
+
+            if (e.key === 'ArrowRight') {
+                showNext();
+                e.preventDefault();
+            } else if (e.key === 'ArrowLeft') {
+                showPrev();
+                e.preventDefault();
+            }
+        });
 
         // allow left/right arrows to cycle the deck
         document.addEventListener('keydown', e => {
