@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Song of the Day (Spotify) — Paper</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inconsolata', monospace; background: #FFFBF5; color: #333; }
+    .content-box { border: 1px dashed #d1d5db; padding: 2rem; background: #fff; }
+    .viewer { border: 1px solid #e5e7eb; background: #fff; border-radius: 8px; min-height: 480px; overflow: hidden; }
+    .pdf-link { color: #2563eb; text-decoration: underline; }
+  </style>
+</head>
+<body class="antialiased">
+  <div class="container mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8 md:py-16">
+    <div id="header-placeholder"></div>
+
+    <div class="content-box mb-6">
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">Song of the Day (Spotify) — Research Paper</h1>
+      <p class="text-gray-600">This page embeds the compiled PDF if present. If no PDF is available, it shows the LaTeX source. To build locally, see instructions below.</p>
+      <div id="pdf-note" class="mt-3 text-sm"></div>
+    </div>
+
+    <div class="content-box">
+      <h2 class="text-xl font-semibold text-gray-900 mb-3">viewer</h2>
+      <div id="latex-root" class="viewer p-0 overflow-hidden"></div>
+    </div>
+  </div>
+
+  <script>
+    // Load header
+    fetch('../header.html').then(r => r.text()).then(html => { document.getElementById('header-placeholder').innerHTML = html; });
+
+    // Prefer compiled PDF if present, otherwise show LaTeX source (no client-side TeX rendering)
+    const TEX_PATH = 'song-of-the-day.tex';
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+
+    const PDF_PATH = 'song-of-the-day.pdf';
+
+    function showPdf() {
+      const root = document.getElementById('latex-root');
+      root.innerHTML = '';
+      const iframe = document.createElement('iframe');
+      iframe.src = PDF_PATH;
+      iframe.className = 'w-full';
+      iframe.style.minHeight = '70vh';
+      iframe.setAttribute('title', 'Song of the Day (PDF)');
+      root.appendChild(iframe);
+    }
+
+    // Check for PDF first
+    fetch(PDF_PATH, { method: 'HEAD' }).then(r => {
+      if (r.ok) {
+        // Embed PDF and add note link
+        showPdf();
+        const note = document.getElementById('pdf-note');
+        if (note) {
+          note.innerHTML = `Compiled PDF available: <a class="pdf-link" href="${PDF_PATH}" target="_blank">open PDF</a>`;
+        }
+      } else {
+        // Fall back to showing build instructions (no client-side TeX rendering)
+        fetch(TEX_PATH)
+          .then(r => r.text())
+          .then(tex => {
+            const root = document.getElementById('latex-root');
+            root.innerHTML = `<div class=\"p-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded\">No PDF present. Compile locally and save as <code>papers/song-of-the-day.pdf</code>.<br/>Example (recommended): <code>brew install tectonic</code> then <code>tectonic papers/song-of-the-day.tex -o papers</code>.</div>`;
+          })
+          .catch(err => {
+            document.getElementById('latex-root').innerHTML = '<div class="text-red-700">Unable to load LaTeX file.</div>';
+            console.error(err);
+          });
+      }
+    }).catch(() => {
+      // Network HEAD failed; show build instructions
+      fetch(TEX_PATH)
+        .then(r => r.text())
+        .then(tex => {
+          const root = document.getElementById('latex-root');
+          root.innerHTML = `<div class=\"p-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded\">No PDF present. Compile locally and save as <code>papers/song-of-the-day.pdf</code>.<br/>Example: <code>brew install tectonic</code> then <code>tectonic papers/song-of-the-day.tex -o papers</code>.</div>`;
+        })
+        .catch(err => {
+          document.getElementById('latex-root').innerHTML = '<div class="text-red-700">Unable to load LaTeX file.</div>';
+          console.error(err);
+        });
+    });
+
+  </script>
+</body>
+</html>
