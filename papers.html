@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Papers / Research</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" />
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;500;600;700&family=Raleway:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <!-- latex.js for in-browser LaTeX rendering of .tex (optional) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/latex.js/dist/latex.css" />
+  <script src="https://cdn.jsdelivr.net/npm/latex.js/dist/latex.min.js"></script>
+  <style>
+    body {
+      font-family: 'Inconsolata', monospace;
+      background-color: #FFFBF5;
+      color: #333;
+    }
+    .content-box {
+      border: 1px dashed #d1d5db;
+      padding: 2rem;
+      background: #fff;
+    }
+    .fade-in-element { opacity: 0; transform: translateY(20px); transition: opacity 0.6s ease-out, transform 0.6s ease-out; }
+    .fade-in-element.is-visible { opacity: 1; transform: translateY(0); }
+    .doc-card { border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
+    .viewer { border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; min-height: 480px; }
+    .dropzone { border: 2px dashed #d1d5db; border-radius: 12px; background: #fafafa; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
+  </style>
+</head>
+<body class="antialiased">
+  <div class="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-8 md:py-16">
+    <div id="header-placeholder"></div>
+
+    <!-- Header -->
+    <div class="content-box fade-in-element mb-8">
+      <h1 class="text-4xl font-bold text-gray-900 mb-2">papers / research</h1>
+      <p class="text-gray-600">Upload and read LaTeX (.tex) or PDF documents. PDF files are shown in the viewer; .tex files render in-browser.</p>
+    </div>
+
+    <!-- Upload / Add Section -->
+    <div class="content-box fade-in-element mb-8">
+      <div class="grid md:grid-cols-2 gap-6 items-start">
+        <!-- File Upload -->
+        <div>
+          <h2 class="text-xl font-semibold text-gray-900 mb-3">Upload files</h2>
+          <div id="dropzone" class="dropzone p-6 text-center text-gray-600">
+            <i class="bi bi-cloud-arrow-up text-3xl mb-2"></i>
+            <p class="mb-2">Drag and drop PDF or TEX here</p>
+            <p class="text-sm text-gray-500 mb-4">or</p>
+            <label class="inline-flex items-center px-4 py-2 bg-gray-900 text-white rounded cursor-pointer hover:bg-gray-800">
+              <i class="bi bi-file-earmark-arrow-up mr-2"></i> Choose files
+              <input id="file-input" type="file" class="hidden" accept="application/pdf,.pdf,.tex" multiple />
+            </label>
+          </div>
+          <p class="text-xs text-gray-500 mt-2">Files are not persisted on the server; this page previews them locally. Put PDFs in <code class="code">assets/</code> and link them to keep them on the site.</p>
+        </div>
+        <!-- Add by URL -->
+        <div>
+          <h2 class="text-xl font-semibold text-gray-900 mb-3">Add by URL</h2>
+          <div class="flex gap-2 mb-2">
+            <input id="url-input" type="url" placeholder="https://example.com/paper.pdf" class="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-gray-400" />
+            <input id="title-input" type="text" placeholder="Title (optional)" class="w-1/3 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-gray-400" />
+            <button id="add-url" class="px-4 py-2 bg-gray-900 text-white rounded hover:bg-gray-800"><i class="bi bi-plus-lg mr-1"></i>Add</button>
+          </div>
+          <p class="text-xs text-gray-500">Supports PDF links. For local assets, place files in <code class="code">assets/</code> and use a path like <code class="code">assets/MyPaper.pdf</code>.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Documents Grid -->
+    <div class="content-box fade-in-element mb-8">
+      <h2 class="text-xl font-semibold text-gray-900 mb-4">documents</h2>
+      <div id="docs-grid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </div>
+
+    <!-- Viewer -->
+    <div class="content-box fade-in-element">
+      <h2 class="text-xl font-semibold text-gray-900 mb-3">viewer</h2>
+      <div id="viewer" class="viewer p-0 overflow-hidden"></div>
+    </div>
+  </div>
+
+  <script>
+    // Load header
+    document.addEventListener('DOMContentLoaded', () => {
+      fetch('header.html').then(r => r.text()).then(html => { document.getElementById('header-placeholder').innerHTML = html; });
+
+      // Fade-in
+      const els = document.querySelectorAll('.fade-in-element');
+      const obs = new IntersectionObserver((entries) => {
+        entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('is-visible'); obs.unobserve(e.target); } });
+      }, { threshold: 0.1 });
+      els.forEach(el => obs.observe(el));
+
+      // State
+      const docs = [];
+      const grid = document.getElementById('docs-grid');
+      const viewer = document.getElementById('viewer');
+
+      function extOf(name) { return (name.split('.').pop() || '').toLowerCase(); }
+
+      function renderDocs() {
+        grid.innerHTML = '';
+        if (docs.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'col-span-full text-center text-gray-500 py-8';
+          empty.innerHTML = '<i class="bi bi-file-earmark-text text-4xl mb-2 block"></i>No documents yet';
+          grid.appendChild(empty);
+          return;
+        }
+        docs.forEach((d, idx) => {
+          const card = document.createElement('div');
+          card.className = 'doc-card p-4 flex flex-col';
+          const icon = (d.type === 'pdf') ? 'bi-filetype-pdf text-red-600' : 'bi-braces text-gray-700';
+          card.innerHTML = `
+            <div class="flex items-center gap-3 mb-3">
+              <i class="bi ${icon} text-2xl"></i>
+              <div>
+                <div class="font-semibold text-gray-900 truncate">${d.title || d.name}</div>
+                <div class="text-xs text-gray-500 truncate">${d.name}</div>
+              </div>
+            </div>
+            <div class="mt-auto flex gap-2">
+              <button data-idx="${idx}" class="open-btn px-3 py-1.5 bg-gray-900 text-white rounded text-xs hover:bg-gray-800"><i class="bi bi-eye mr-1"></i>Open</button>
+              ${d.url ? `<a href="${d.url}" target="_blank" class="px-3 py-1.5 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-50"><i class=\"bi bi-box-arrow-up-right mr-1\"></i>New Tab</a>` : ''}
+            </div>`;
+          grid.appendChild(card);
+        });
+        grid.querySelectorAll('.open-btn').forEach(btn => btn.addEventListener('click', (e) => {
+          const i = Number(e.currentTarget.getAttribute('data-idx'));
+          openDoc(docs[i]);
+        }));
+      }
+
+      function openDoc(d) {
+        viewer.innerHTML = '';
+        if (d.type === 'pdf') {
+          const iframe = document.createElement('iframe');
+          iframe.src = d.url || d.blobUrl;
+          iframe.className = 'w-full';
+          iframe.style.minHeight = '70vh';
+          iframe.setAttribute('title', d.title || d.name);
+          viewer.appendChild(iframe);
+        } else if (d.type === 'tex') {
+          const pre = document.createElement('div');
+          pre.className = 'p-4 overflow-auto';
+          try {
+            const parser = new latexjs.Parser();
+            const doc = parser.parse(d.text || '');
+            const html = doc.render();
+            pre.appendChild(html);
+          } catch (err) {
+            pre.innerHTML = `<div class="p-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded">Failed to render LaTeX. Showing source.<pre class="mt-2 text-xs code whitespace-pre-wrap">${escapeHtml(d.text || '')}</pre></div>`;
+          }
+          viewer.appendChild(pre);
+        }
+      }
+
+      function addFile(file) {
+        const name = file.name;
+        const type = extOf(name) === 'pdf' ? 'pdf' : (extOf(name) === 'tex' ? 'tex' : null);
+        if (!type) return;
+        const entry = { name, title: name, type };
+        if (type === 'pdf') {
+          entry.blobUrl = URL.createObjectURL(file);
+        } else {
+          const fr = new FileReader();
+          fr.onload = () => { entry.text = String(fr.result || ''); renderDocs(); };
+          fr.readAsText(file);
+        }
+        docs.push(entry);
+        renderDocs();
+      }
+
+      function addUrl(url, title) {
+        const name = url.split('/').pop() || url;
+        const typeGuess = extOf(name) === 'pdf' ? 'pdf' : null;
+        if (!typeGuess) return alert('Only PDF URLs are supported.');
+        docs.push({ name, title: title || name, type: 'pdf', url });
+        renderDocs();
+      }
+
+      // Upload events
+      const dz = document.getElementById('dropzone');
+      const fi = document.getElementById('file-input');
+      dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('bg-gray-100'); });
+      dz.addEventListener('dragleave', (e) => { e.preventDefault(); dz.classList.remove('bg-gray-100'); });
+      dz.addEventListener('drop', (e) => {
+        e.preventDefault(); dz.classList.remove('bg-gray-100');
+        [...e.dataTransfer.files].forEach(addFile);
+      });
+      fi.addEventListener('change', (e) => { [...e.target.files].forEach(addFile); fi.value = ''; });
+
+      // URL add
+      document.getElementById('add-url').addEventListener('click', () => {
+        const url = document.getElementById('url-input').value.trim();
+        const title = document.getElementById('title-input').value.trim();
+        if (!url) return;
+        addUrl(url, title);
+        document.getElementById('url-input').value = '';
+        document.getElementById('title-input').value = '';
+      });
+
+      // Helper
+      function escapeHtml(str) { return str.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+      // Seed example: local resume pdf if present
+      const resumePath = 'assets/SilasSpencer_Resume.pdf';
+      fetch(resumePath, { method: 'HEAD' }).then(r => { if (r.ok) { addUrl(resumePath, 'Resume'); } });
+    });
+  </script>
+</body>
+</html>

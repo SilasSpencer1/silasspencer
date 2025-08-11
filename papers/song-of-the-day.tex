@@ -1,0 +1,215 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  citecolor=black
+}
+
+\title{Song of the Day (Spotify): A Lightweight, Novelty-Aware and Mood-Conditioned Music Recommender}
+\author{Silas Spencer}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \emph{Song of the Day} (SotD), a lightweight music recommender that surfaces exactly one \emph{Song of the Day} and five alternates per day using a user's Spotify history. The system blends four objectives: (1) novelty---to reduce repetition and emphasize discovery; (2) user fit---to respect a user's long-term taste; (3) optional mood alignment---via a valence--arousal mapping onto Spotify audio features; and (4) diversity---to avoid redundant alternates. SotD is implemented in Python (Poetry-managed), leverages the Spotify Web API via \texttt{spotipy}, uses \texttt{pandas}/\texttt{numpy}/\texttt{scikit-learn} for data processing and modeling, provides a quick UI in Streamlit, and persists lightweight caches in SQLite. We describe the design, scoring model, re-ranking scheme, implementation details, and challenges (API limits, bias, mood interpretation, and privacy). We include a reproducible CLI and outline evaluation criteria and future work (context-aware factors, reinforcement learning re-ranking, and richer explanations).
+\end{abstract}
+
+\section{Introduction}
+Daily recommendation experiences (e.g., ``song of the day'') provide a focused ritual that can improve perceived quality and reduce choice overload. While modern streaming platforms excel at large-scale recommendation, power users often desire controllable, inspectable, and reproducible tooling on their own data. SotD aims to be:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Minimal}: one canonical pick $+$ five alternates.
+  \item \textbf{Balanced}: novelty, fit, optional mood, and diversity.
+  \item \textbf{Local and transparent}: small stack, human-readable rationale.
+\end{itemize}
+
+\section{Background and Foundation}
+\subsection{Recommenders and Multi-Objective Trade-offs}
+Recommender systems frequently optimize a blend of accuracy and beyond-accuracy goals such as novelty, serendipity, and diversity. In music, over-emphasizing accuracy can lead to \emph{feedback loops} and recommendation collapse; over-emphasizing novelty can decrease satisfaction. SotD targets the \emph{daily} granularity, enabling a meaningful blend at a small slate size (1 $+$ 5).
+
+\subsection{Valence--Arousal Mood Space}
+To optionally align recommendations with self-reported mood, we use the circumplex model (valence: positive/negative; arousal: energetic/calm). Spotify provides \texttt{valence} and proxies for arousal (e.g., \texttt{energy}, \texttt{tempo}); we map mood prompts (e.g., ``chill'') to a target $(v^\star, a^\star)$ and measure distance to track features.
+
+\subsection{Data Sources}
+We use the Spotify Web API via \texttt{spotipy} to retrieve:
+\begin{itemize}[leftmargin=*]
+  \item Recent plays, top artists, and top tracks/genres (short/medium/long term).
+  \item Track-level audio features (valence, energy, tempo, danceability, etc.).
+\end{itemize}
+A local SQLite cache minimizes repeated network calls and speeds up daily runs.
+
+\section{System Overview}
+\subsection{Objectives}
+Given candidate tracks $\mathcal{C}$ derived from a user's listening graph, we compute a composite score
+\begin{equation}
+S(t) \;=\; w_n \,\underbrace{\mathrm{Nov}(t)}_{\text{novelty}} \;+\; w_f \,\underbrace{\mathrm{Fit}(t)}_{\text{taste fit}} \;+\; w_m \,\underbrace{\mathrm{Mood}(t)}_{\text{valence--arousal}} \;+\; w_d \,\underbrace{\mathrm{Div}(t\,|\,\mathcal{S})}_{\text{diversity in re-rank}},
+\label{eq:score}
+\end{equation}
+where $\mathcal{S}$ is the selected set (empty for the primary pick, non-empty during alternates re-ranking). We output the top-1 as the \emph{Song of the Day} and greedily re-rank for five diverse alternates.
+
+\subsection{Data Flow}
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Ingestion}: recent tracks, top artists/tracks, and audio features.
+  \item \textbf{Caching}: persisted in SQLite at \texttt{./data/sotd\_cache.db}.
+  \item \textbf{Featureization}: compute novelty features (recency, lifetime usage), user taste vectors, mood target $(v^\star,a^\star)$.
+  \item \textbf{Candidate generation}: merge recent items, items from top artists/genres, and optionally unseen catalog from followed artists.
+  \item \textbf{Scoring and re-ranking}: compute $S(t)$ and perform diversity-aware greedy selection.
+  \item \textbf{Presentation}: CLI or Streamlit UI shows the pick, alternates, and rationale.
+\end{enumerate}
+
+\section{Methodology}
+\subsection{Novelty}
+We penalize over-exposed items using both short-term recency and lifetime plays:
+\begin{align}
+\mathrm{Nov}(t) \;&=\; \alpha \cdot \exp\!\left(-\frac{\Delta\mathrm{days}(t)}{\tau}\right) \;+\; (1-\alpha)\cdot \left(1 - \frac{\mathrm{Plays}_\mathrm{lifetime}(t)}{\max\_p + \epsilon}\right),
+\label{eq:novelty}
+\end{align}
+where $\Delta\mathrm{days}(t)$ is days since last play, $\tau$ is a decay constant, and $\max\_p$ normalizes lifetime plays. This rewards ``not recently played'' and ``less saturated'' tracks.
+
+\subsection{User Fit}
+We embed users and tracks in a feature space combining audio features and (optionally) artist/genre one-hot or embeddings. Let $u \in \mathbb{R}^d$ denote a user taste vector (e.g., average of historical track vectors with recency weighting) and $x_t \in \mathbb{R}^d$ the track vector. Fit is cosine similarity:
+\begin{equation}
+\mathrm{Fit}(t) \;=\; \frac{u^\top x_t}{\lVert u\rVert \,\lVert x_t\rVert}.
+\label{eq:fit}
+\end{equation}
+
+\subsection{Mood Alignment (Optional)}
+Map a mood prompt to a target $(v^\star,a^\star)$; we construct a track arousal proxy $a_t$ using a normalized combination of \texttt{energy}, \texttt{tempo}, and \texttt{danceability}, and use Spotify \texttt{valence} as $v_t$. Mood match is the negative distance:
+\begin{equation}
+\mathrm{Mood}(t) \;=\; 1 - \sqrt{(v_t - v^\star)^2 + (a_t - a^\star)^2}.
+\label{eq:mood}
+\end{equation}
+If no mood is provided, set $w_m=0$.
+
+\subsection{Diversity via Greedy Re-Ranking}
+We use Maximal Marginal Relevance (MMR)-style re-ranking for alternates:
+\begin{equation}
+\mathrm{MMR}(t\,|\,\mathcal{S}) \;=\; \lambda \,\widetilde{S}(t) \;-\; (1-\lambda)\,\max_{s \in \mathcal{S}} \mathrm{sim}(x_t, x_s),
+\end{equation}
+where $\widetilde{S}$ is min--max normalized base score from Eq.~\eqref{eq:score} with $w_d\!=\!0$, and $\mathrm{sim}$ is cosine similarity. We iteratively add the item with highest MMR until five alternates are chosen.
+
+\subsection{End-to-End Algorithm (Greedy)}
+\noindent\textbf{Inputs:} user history $\mathcal{H}$, audio features, optional mood $(v^\star,a^\star)$, weights $(w_n,w_f,w_m)$, $\lambda$, alternates $k{=}5$.
+\begin{enumerate}[leftmargin=*]
+  \item Build candidates $\mathcal{C}$ from recent tracks, top artists/genres (plus unseen items).
+  \item Compute $\mathrm{Nov}(t)$, $\mathrm{Fit}(t)$, and $\mathrm{Mood}(t)$ for $t\in\mathcal{C}$.
+  \item Compute base score $S_0(t) = w_n \mathrm{Nov}(t) + w_f \mathrm{Fit}(t) + w_m \mathrm{Mood}(t)$.
+  \item Pick $t^\star = \arg\max_{t\in\mathcal{C}} S_0(t)$ as the Song of the Day. Set $\mathcal{S} \leftarrow \{t^\star\}$.
+  \item For $i=1$ to $k$: select $t_i = \arg\max_{t\in\mathcal{C}\setminus\mathcal{S}} \mathrm{MMR}(t\,|\,\mathcal{S})$ and update $\mathcal{S} \leftarrow \mathcal{S} \cup \{t_i\}$.
+  \item Return $t^\star$ and $\{t_1,\dots,t_k\}$ with per-component contributions as rationale.
+\end{enumerate}
+
+\section{Implementation}
+\subsection{Stack}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Language/Tooling:} Python 3.11, Poetry.
+  \item \textbf{Libraries:} \texttt{spotipy}, \texttt{pandas}, \texttt{numpy}, \texttt{scikit-learn}.
+  \item \textbf{UI:} Streamlit (quick daily UI).
+  \item \textbf{Storage:} SQLite (\texttt{./data/sotd\_cache.db}) for token, profile, and feature caches.
+\end{itemize}
+
+\subsection{Reproducibility \& Setup}
+\noindent\textbf{Install Poetry (macOS):}
+\begin{verbatim}
+brew install poetry
+\end{verbatim}
+\noindent\textbf{Or:}
+\begin{verbatim}
+curl -sSL https://install.python-poetry.org | python3 -
+\end{verbatim}
+
+\noindent\textbf{Environment:}
+\begin{verbatim}
+cp example.env .env
+# Fill SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI, SPOTIFY_USERNAME
+\end{verbatim}
+
+\noindent\textbf{Dependencies:}
+\begin{verbatim}
+poetry install
+# Optional shell
+poetry shell
+\end{verbatim}
+
+\noindent\textbf{CLI:}
+\begin{verbatim}
+poetry run song-of-the-day --mood "chill" --limit 20
+\end{verbatim}
+
+\noindent\textbf{Streamlit:}
+\begin{verbatim}
+poetry run streamlit run app/streamlit_app.py
+\end{verbatim}
+
+\subsection{Caching and Rate Limits}
+All API responses (user profile slices, audio features) are cached in SQLite with timestamps. We invalidate stale segments (e.g., recent plays) based on configurable TTLs and batch audio-feature queries to respect Spotify rate limits.
+
+\section{Evaluation}
+SotD is built for personal usage; nevertheless, we outline evaluation axes suitable for small-scale studies:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Repetition control:} proportion of days where the daily pick is not in the last-$N$ days of history.
+  \item \textbf{Diversity:} intra-list diversity among the five alternates (average pairwise dissimilarity).
+  \item \textbf{Mood fidelity:} correlation between target $(v^\star,a^\star)$ and selected items' $(v_t,a_t)$.
+  \item \textbf{User satisfaction:} Likert feedback or thumbs-up on daily picks.
+  \item \textbf{Coverage/novel discovery:} fraction of picks that were previously unplayed or from underrepresented artists/genres.
+\end{itemize}
+A pragmatic approach is an A/B over several weeks varying $(w_n,w_f,w_m,\lambda)$ and analyzing engagement and feedback.
+
+\section{Challenges and Limitations}
+\paragraph{API Constraints.} Rate limits and pagination require batching and caching; new users with sparse data can face cold-start issues.\\
+\paragraph{Bias and History Effects.} Top-artist seeding can entrench past preferences; we mitigate via novelty penalties and diversity-aware alternates.\\
+\paragraph{Mood Interpretation.} Mapping free-text mood to $(v^\star,a^\star)$ is lossy; synonyms and cultural context can misalign with audio features.\\
+\paragraph{Explainability.} Presenting clear rationale (e.g., novelty gain vs.\ fit trade-off) is essential to trust; we include per-component score breakdowns.
+
+\section{Ethical and Privacy Considerations}
+User listening data are personal. SotD only accesses scopes strictly required for recommendation, stores minimal derived features locally, and supports revoking tokens. Rationale should avoid revealing sensitive insights (e.g., inferred demographics). We recommend transparency about what is cached and why.
+
+\section{Future Work}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Context-aware features:} time-of-day, weekday, weather, and activity cues to improve fit.
+  \item \textbf{Learning to re-rank:} bandits or RL (e.g., MAB/MMR hybrids) using implicit feedback on daily picks.
+  \item \textbf{Richer embeddings:} CLAP/semantic-audio or graph-based artist embeddings for better similarity.
+  \item \textbf{Better mood interface:} few-shot mapping from free text to $(v^\star,a^\star)$ with calibration.
+  \item \textbf{Explanations:} natural-language rationales summarizing novelty, mood, and fit in a concise blurb.
+\end{itemize}
+
+\section{Conclusion}
+We introduced a pragmatic, local-first recommender that balances novelty, fit, optional mood, and diversity to produce a single ``Song of the Day'' with five alternates. With a compact stack and transparent scoring, SotD offers an inspectable daily ritual that encourages discovery without abandoning personal taste. We outlined design choices, scoring, re-ranking, and evaluation criteria, and discussed limitations and future enhancements.
+
+\paragraph{Availability.} The system uses Poetry for reproducibility, a CLI for automation, and a Streamlit app for quick interaction. The cache (\texttt{./data/sotd\_cache.db}) is created on first run. Ensure the Spotify Redirect URI matches \texttt{.env} (default \texttt{http://localhost:8080/callback}).
+
+\begin{thebibliography}{9}
+\bibitem{spotifyapi}
+Spotify Web API. \emph{Spotify for Developers}. \url{https://developer.spotify.com/documentation/web-api}
+
+\bibitem{russell1980}
+J.~A. Russell.
+A circumplex model of affect.
+\emph{Journal of Personality and Social Psychology}, 39(6):1161--1178, 1980.
+
+\bibitem{recosurvey}
+J. Bobadilla, F. Ortega, A. Hernando, and A. Guti\'errez.
+Recommender systems survey.
+\emph{Knowledge-Based Systems}, 46:109--132, 2013.
+
+\bibitem{sklearn}
+F. Pedregosa et al.
+Scikit-learn: Machine learning in Python.
+\emph{JMLR}, 12:2825--2830, 2011.
+
+\bibitem{streamlit}
+Streamlit, Inc. Streamlit Documentation. \url{https://docs.streamlit.io}
+\end{thebibliography}
+
+\end{document}
